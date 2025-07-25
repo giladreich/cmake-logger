@@ -36,7 +36,7 @@
 #      e.g. log_info("Hello CMakeLogger")
 #
 #   Additionaly, you can configure in your root CMakeLists.txt how logs will be outputed.
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.10)
 
 set(CMLOGGER_VERSION "v1.0.1"
   CACHE STRING "CMakeLogger: Version")
