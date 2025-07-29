@@ -80,6 +80,9 @@ set_property(CACHE CMLOGGER_OUTPUT_PROJECTNAME PROPERTY STRINGS ON OFF)
 set(CMLOGGER_TIMERS ON
   CACHE STRING "CMakeLogger: Turn this off if not desired to use any of the timers functions")
 
+set(CMLOGGER_VERBOSE ON
+  CACHE STRING "CMakeLogger: Turn this off if not desired to see CMakeLogger internal messages.")
+
 # END Configurations
 ##################################################################################################################
 
@@ -193,8 +196,7 @@ function(CMakeLogger_log cmakeMsgType level msg color)
 
   CMakeLogger_format(${msg} ${level})
 
-  CMakeLogger_can_print_colors()
-  if("${CMLOGGER_OUTPUT_COLORIZED}" STREQUAL "ON" AND "${CMLOGGER_CAN_PRINT_COLORS}" STREQUAL "true")
+  if(CMLOGGER_OUTPUT_COLORIZED AND CMLOGGER_CAN_PRINT_COLORS)
     CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX}${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
 
     # For FATAL_ERROR and WARNING modes, cmake will print the call stack and stop the execution, therefore
@@ -233,41 +235,350 @@ function(CMakeLogger_format msg level)
   set(msg "${MSG_FORMAT}" PARENT_SCOPE)
 endfunction()
 
-# NOTE(Gilad): CMake does not support ANSI colors on Windows (cmCTest::ColoredOutputSupportedByConsole), but some
-# terminals (e.g. ConEmu) worked around this. We therefore do our own determinations for printing with colors.
-# cmSystemTools::MakefileColorEcho -> cmsysTerminal_Color_AssumeTTY
-# https://cmake.org/pipermail/cmake-developers/2015-October/026730.html
-function(CMakeLogger_can_print_colors)
-  unset(CMLOGGER_CAN_PRINT_COLORS)
+function(_cmlogger_message msg)
+  if(CMLOGGER_VERBOSE)
+    message(STATUS "[CMakeLogger] ${msg}")
+  endif()
+endfunction()
 
-  # To print the current environment
-  # execute_process(COMMAND ${CMAKE_COMMAND} -E environment)
-  # TODO(Gilad): Find how to get the name of the process that were calling this script. this will improve
-  # these checks.
-  if(NOT WIN32)
-    if(NOT "$ENV{_}" MATCHES "cmake-gui$")
-      set(CMLOGGER_CAN_PRINT_COLORS true PARENT_SCOPE)
-    endif()
-  else()
-    # Excluded apps determined by defining the following variables
-    if(
-      NOT "$ENV{VSAPPIDNAME}"        STREQUAL "devenv.exe"           AND # Visual Studio
-      NOT "$ENV{__COMPAT_LAYER}"     STREQUAL "DetectorsAppHealth"   AND # cmake-gui
-      NOT "$ENV{TERMINAL_EMULATOR}"  STREQUAL "JetBrains-JediTerm"       # CLion TODO(Gilad): Check on UNIX systems
+function(_cmlogger_get_process_tree out_list)
+  set(process_tree)
+  if(WIN32)
+    set(process_tree_ps [=[
+    $names = @()
+    $cur_pid = $PID
+    while ($cur_pid) {
+      $p = Get-CimInstance Win32_Process -Filter "ProcessId=$cur_pid" -ea 0
+      if ($p.Name) { $names = @($p.Name) + $names }
+      $cur_pid = $p.ParentProcessId
+    }
+    $names -join ';'
+    ]=])
+
+    execute_process(
+      COMMAND powershell -NoProfile -Command "${process_tree_ps}"
+      OUTPUT_VARIABLE process_tree
+      OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-      # We managed to get through the excluded environment variables, now let's check
-      # for any variables that make it possible printing with colors on Windows
-      if(
-        NOT "$ENV{TERM}"           STREQUAL ""         OR
-        NOT "$ENV{ANSICON}"        STREQUAL ""         OR
-            "$ENV{CLICOLOR}"       STREQUAL "1"        OR
-            "$ENV{CLICOLOR_FORCE}" STREQUAL "1"        OR
-            "$ENV{TERM_PROGRAM}"   STREQUAL "vscode"
-      )
-        set(CMLOGGER_CAN_PRINT_COLORS true PARENT_SCOPE)
-      endif()
+  else()
+    set(process_tree_sh [=[
+      pid=$$
+      names=()
+
+      while [ "$pid" -ne 0 ]; do
+        name=$(ps -p "$pid" -o comm=)
+        # Extract basename manually to handle edge cases like -zsh and paths with spaces
+        basename_name=$(basename "$name" 2>/dev/null || echo "$name")
+        names=("$basename_name" "${names[@]}")
+        pid=$(ps -p "$pid" -o ppid= | tr -d ' ')
+      done
+
+      (IFS=\; ; echo "${names[*]}")
+    ]=])
+
+    execute_process(
+      COMMAND bash -c "${process_tree_sh}"
+      OUTPUT_VARIABLE process_tree
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  endif()
+
+  set(${out_list} "${process_tree}" PARENT_SCOPE)
+endfunction()
+
+function(_cmlogger_has_ansi_incompatible_known_tools_win32 out_bool process_tree)
+  if("cmake-gui.exe" IN_LIST process_tree)
+    _cmlogger_message("Detected cmake-gui, disabling colors")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Check for Visual Studio GUI -> MSBuild chain (VS Output window doesn't support ANSI)
+  # VS integrated terminal creates a different chain: devenv.exe -> ServiceHub -> powershell.exe -> cmake.exe
+  if("${process_tree}" MATCHES "devenv.exe;msbuild.exe")
+    _cmlogger_message("Detected Visual Studio GUI -> MSBuild, disabling colors")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  set(${out_bool} FALSE PARENT_SCOPE)
+endfunction()
+
+function(_cmlogger_has_ansi_incompatible_known_tools_unix out_bool process_tree)
+  if("cmake-gui" IN_LIST process_tree)
+    _cmlogger_message("Detected cmake-gui, disabling colors")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  if(APPLE)
+    # macOS cmake-gui detection complexity: Unlike Linux/Windows where cmake-gui is standalone,
+    # on macOS it's a symbolic link to the actual CMake executable, requiring multi-scenario detection.
+    #
+    # Detection scenarios:
+    # 1. Terminal launch (`cmake-gui .`): Caught by previous unix check - process name is "cmake-gui"
+    # 2. Finder app bundle launch (CMake.app): Detectable via XPC_SERVICE_NAME="application.org.cmake*"
+    # 3. Finder direct binary launch (CMake.app/Contents/bin/cmake-gui): Problematic case - spawns terminal
+    #    that launches cmake in GUI mode, but XPC_SERVICE_NAME is unset and process tree shows "cmake"
+    #    instead of "cmake-gui". This is uncommon but creates a detection gap.
+    #
+    # TODO: Request Kitware add CMAKE_GUI environment variable (like JetBrains' CLION_IDE)
+    # to eliminate ambiguity between cmake CLI and cmake-gui on macOS.
+    if("cmake" IN_LIST process_tree AND "$ENV{XPC_SERVICE_NAME}" MATCHES "^application\\.org\\.cmake")
+      _cmlogger_message("Detected cmake-gui app bundle, disabling colors")
+      set(${out_bool} TRUE PARENT_SCOPE)
+      return()
+    endif()
+
+    # Xcode detection: Child processes inherit environment variables, causing false color detection.
+    # Terminal-launched Xcode (e.g. `open project.xcodeproj`) inherits COLORTERM but Xcode's
+    # output window doesn't support ANSI colors.
+    # Detect system-launched Xcode via launchd->Xcode process chain to disable colors correctly.
+    if("${process_tree}" MATCHES "launchd;xcode")
+      _cmlogger_message("Detected Xcode, disabling colors")
+      set(${out_bool} TRUE PARENT_SCOPE)
+      return()
     endif()
   endif()
+
+  set(${out_bool} FALSE PARENT_SCOPE)
+endfunction()
+
+function(_cmlogger_is_terminal_ansi_colors_supported_win32 out_bool)
+  if(DEFINED ENV{WT_SESSION})
+    _cmlogger_message("Detected Windows Terminal")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  if(DEFINED ENV{ConEmuBuild})
+    _cmlogger_message("Detected ConEmu terminal")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  if(DEFINED ENV{ANSICON})
+    _cmlogger_message("Detected ANSICON support")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Windows 10+ native ANSI support
+  # https://learn.microsoft.com/en-us/powershell/module/Microsoft.PowerShell.Core/about/about_ansi_terminals
+  execute_process(
+    COMMAND cmd /c "ver"
+    OUTPUT_VARIABLE windows_version
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(windows_version MATCHES "Version ([0-9]+)\\.")
+    set(windows_version_major ${CMAKE_MATCH_1})
+    if(windows_version_major GREATER_EQUAL 10)
+      _cmlogger_message("Detected Windows ${windows_version_major}+ with native ANSI support")
+      set(${out_bool} TRUE PARENT_SCOPE)
+      return()
+    endif()
+  else()
+    _cmlogger_message("Could not determine Windows version (${windows_version})")
+  endif()
+
+  set(${out_bool} FALSE PARENT_SCOPE)
+endfunction()
+
+function(_cmlogger_is_terminal_ansi_colors_supported_unix out_bool)
+  # Check if output is a TTY
+  execute_process(
+    COMMAND tty
+    RESULT_VARIABLE is_tty_result
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+  if(NOT is_tty_result EQUAL 0)
+    _cmlogger_message("Output not a TTY")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Check against known VT100-compatible terminals (based on CMake's kVT100Names)
+  if(DEFINED ENV{TERM})
+    set(vt100_terminals
+      "Eterm"
+      "alacritty"
+      "alacritty-direct"
+      "ansi"
+      "color-xterm"
+      "con132x25"
+      "con132x30"
+      "con132x43"
+      "con132x60"
+      "con80x25"
+      "con80x28"
+      "con80x30"
+      "con80x43"
+      "con80x50"
+      "con80x60"
+      "cons25"
+      "console"
+      "cygwin"
+      "dtterm"
+      "eterm-color"
+      "gnome"
+      "gnome-256color"
+      "konsole"
+      "konsole-256color"
+      "kterm"
+      "linux"
+      "linux-c"
+      "mach-color"
+      "mlterm"
+      "msys"
+      "putty"
+      "putty-256color"
+      "rxvt"
+      "rxvt-256color"
+      "rxvt-cygwin"
+      "rxvt-cygwin-native"
+      "rxvt-unicode"
+      "rxvt-unicode-256color"
+      "screen"
+      "screen-256color"
+      "screen-256color-bce"
+      "screen-bce"
+      "screen-w"
+      "screen.linux"
+      "st-256color"
+      "tmux"
+      "tmux-256color"
+      "vt100"
+      "xterm"
+      "xterm-16color"
+      "xterm-256color"
+      "xterm-88color"
+      "xterm-color"
+      "xterm-debian"
+      "xterm-kitty"
+      "xterm-termite"
+    )
+
+    if("$ENV{TERM}" IN_LIST vt100_terminals)
+      _cmlogger_message("Detected VT100-compatible terminal: $ENV{TERM}")
+      set(${out_bool} TRUE PARENT_SCOPE)
+      return()
+    else()
+      _cmlogger_message("Unknown terminal type: $ENV{TERM}")
+    endif()
+  endif()
+
+  set(${out_bool} FALSE PARENT_SCOPE)
+endfunction()
+
+# Color detection with priority order:
+# 1. Override environment variables (NO_COLOR, FORCE_COLOR, CLICOLOR_FORCE)
+# 2. Process tree checks for incompatible tools
+# 3. Standard environment variables (CLICOLOR, COLORTERM, MAKE_TERMOUT, etc.)
+# 4. Terminal capability detection
+function(_cmlogger_should_colorize_output out_bool)
+  # Override: NO_COLOR disables colors (https://no-color.org/)
+  if(DEFINED ENV{NO_COLOR})
+    _cmlogger_message("Colors disabled by NO_COLOR")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Override: FORCE_COLOR enables colors (https://force-color.org/)
+  if(DEFINED ENV{FORCE_COLOR})
+    _cmlogger_message("Colors forced by FORCE_COLOR")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Override: CLICOLOR_FORCE enables colors (https://bixense.com/clicolors/)
+  if(DEFINED ENV{CLICOLOR_FORCE})
+    _cmlogger_message("Colors forced by CLICOLOR_FORCE")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Check process tree for incompatible tools
+  # Environment variables can be inherited by child processes (e.g., cmake-gui launched from VS Code
+  # inherits COLORTERM), so we check the actual execution context first
+  _cmlogger_get_process_tree(process_tree)
+  string(TOLOWER "${process_tree}" process_tree)
+  set(has_ansi_incompatible_tool FALSE)
+  if(WIN32)
+    _cmlogger_has_ansi_incompatible_known_tools_win32(has_ansi_incompatible_tool "${process_tree}")
+  else()
+    _cmlogger_has_ansi_incompatible_known_tools_unix(has_ansi_incompatible_tool "${process_tree}")
+  endif()
+  if(has_ansi_incompatible_tool)
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Standard: CLICOLOR=0 disables colors
+  if(DEFINED ENV{CLICOLOR} AND "$ENV{CLICOLOR}" STREQUAL "0")
+    _cmlogger_message("Colors disabled by CLICOLOR")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Standard: COLORTERM indicates color support
+  if(DEFINED ENV{COLORTERM})
+    _cmlogger_message("Colors enabled by COLORTERM")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Standard: MAKE_TERMOUT indicates GNU make 4.1+ color support
+  if(DEFINED ENV{MAKE_TERMOUT} AND NOT "$ENV{MAKE_TERMOUT}" STREQUAL "")
+    _cmlogger_message("Colors enabled by MAKE_TERMOUT")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Standard: TERM=dumb indicates no color support (https://man7.org/linux/man-pages/man7/term.7.html)
+  if(DEFINED ENV{TERM} AND "$ENV{TERM}" STREQUAL "dumb")
+    _cmlogger_message("Colors disabled by TERM=dumb")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  # VS Code integrated terminal detection
+  if(DEFINED ENV{TERM_PROGRAM} AND "$ENV{TERM_PROGRAM}" STREQUAL "vscode")
+    if(DEFINED ENV{VSCODE_INJECTION})
+      _cmlogger_message("Detected VS Code integrated terminal")
+      set(${out_bool} TRUE PARENT_SCOPE)
+      return()
+    endif()
+  endif()
+
+  # JetBrains IDE cmake output window is not a TTY, but it supports colors
+  if(DEFINED ENV{JETBRAINS_IDE} OR DEFINED ENV{CLION_IDE})
+    _cmlogger_message("Detected JetBrains IDE")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # QtCreator normally enables CLICOLOR_FORCE, but this is just a fallback
+  if(DEFINED ENV{QTC_RUN})
+    _cmlogger_message("Detected QtCreator")
+    set(${out_bool} TRUE PARENT_SCOPE)
+    return()
+  endif()
+
+  # Terminal capability detection
+  set(is_terminal_ansi_colors_supported TRUE)
+  if(WIN32)
+    _cmlogger_is_terminal_ansi_colors_supported_win32(is_terminal_ansi_colors_supported)
+  else()
+    _cmlogger_is_terminal_ansi_colors_supported_unix(is_terminal_ansi_colors_supported)
+  endif()
+  if(NOT is_terminal_ansi_colors_supported)
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
+  set(${out_bool} TRUE PARENT_SCOPE)
 endfunction()
 
 function(CMakeLogger_execute_echo_color text color bold sameLine)
@@ -298,3 +609,16 @@ function(CMakeLogger_execute_echo_color text color bold sameLine)
   )
   # set(ENV{CLICOLOR_FORCE} ${CLICOLOR_STATE})
 endfunction()
+
+function(_cmlogger_main)
+  _cmlogger_should_colorize_output(colorized_output)
+  if(colorized_output)
+    if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.24")
+      set(CMAKE_COLOR_DIAGNOSTICS ON CACHE BOOL "Enable colored diagnostics throughout." FORCE)
+    endif()
+  endif()
+  _cmlogger_message("Colorized output: ${colorized_output}")
+  set(CMLOGGER_CAN_PRINT_COLORS ${colorized_output} PARENT_SCOPE)
+endfunction()
+
+_cmlogger_main()
