@@ -119,56 +119,108 @@ endfunction()
 ##################################################################################################################
 # Timers
 
-# Saving initial time when cmake started in UNIX format (remains untouched).
-set(CMLOGGER_TIME_STARTED "0")
+# High-precision timing using CMake's built-in capabilities
+set(_CMLOGGER_TIME_STARTED_MS 0 CACHE INTERNAL "")
+set(_CMLOGGER_TIMER_STARTED_MS 0 CACHE INTERNAL "")
 
-# Saving initial time when log_reset_timer was called in UNIX format.
-set(CMLOGGER_TIMER_STARTED "0")
+# Get current timestamp in milliseconds
+function(_cmlogger_get_timestamp_ms out_string)
+  # Get current timestamp in seconds with microseconds
+  string(TIMESTAMP timestamp_us "%s%f")
 
-# Usage example:
-#   log_reset_timer()
-#   very long task....
-#   log_print_time_taken()
+  # Convert microseconds to milliseconds by truncating the last 3 digits.
+  # This is equivalent to dividing by 1000, but done using string manipulation
+  # because:
+  #   - CMake only supports integer math (no floating point division)
+  #   - The timestamp is a large string that may exceed integer limits
+  #   - String truncation is safer and more portable across platforms
+  string(LENGTH "${timestamp_us}" len)
+  math(EXPR ms_len "${len} - 3")
+  string(SUBSTRING "${timestamp_us}" 0 ${ms_len} timestamp_ms)
+
+  set(${out_string} ${timestamp_ms} PARENT_SCOPE)
+endfunction()
+
+function(log_format_duration_ms out_string duration_ms)
+  math(EXPR total_seconds "${duration_ms} / 1000")
+  math(EXPR milliseconds "${duration_ms} % 1000")
+  math(EXPR minutes "${total_seconds} / 60")
+  math(EXPR seconds "${total_seconds} % 60")
+
+  if(minutes GREATER 0)
+    # Format: "Xm Ys" or "Xm Ys.ZZZs" depending on milliseconds
+    if(milliseconds GREATER 0)
+      # Format milliseconds with leading zeros if needed
+      if(milliseconds LESS 10)
+        set(ms_padded "00${milliseconds}")
+      elseif(milliseconds LESS 100)
+        set(ms_padded "0${milliseconds}")
+      else()
+        set(ms_padded "${milliseconds}")
+      endif()
+      set(${out_string} "${minutes}m ${seconds}.${ms_padded}s" PARENT_SCOPE)
+    else()
+      set(${out_string} "${minutes}m ${seconds}s" PARENT_SCOPE)
+    endif()
+  elseif(total_seconds GREATER 0)
+    # Format: "X.ZZZs" for seconds with milliseconds
+    if(milliseconds GREATER 0)
+      # Format milliseconds with leading zeros if needed
+      if(milliseconds LESS 10)
+        set(ms_padded "00${milliseconds}")
+      elseif(milliseconds LESS 100)
+        set(ms_padded "0${milliseconds}")
+      else()
+        set(ms_padded "${milliseconds}")
+      endif()
+      set(${out_string} "${seconds}.${ms_padded}s" PARENT_SCOPE)
+    else()
+      set(${out_string} "${seconds}s" PARENT_SCOPE)
+    endif()
+  else()
+    # Format: "ZZZms" for pure milliseconds
+    set(${out_string} "${milliseconds}ms" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Reset the timer to current time
 function(log_reset_timer)
-  if(NOT CMLOGGER_TIMERS)
-    return()
-  endif()
+  _cmlogger_get_timestamp_ms(current_time_ms)
+  set(_CMLOGGER_TIMER_STARTED_MS ${current_time_ms} CACHE INTERNAL "")
 
-  string(TIMESTAMP CMLOGGER_TIMER_STARTED "%s")
-  set(CMLOGGER_TIMER_STARTED ${CMLOGGER_TIMER_STARTED} PARENT_SCOPE)
-
-    # If it's 0, meaning it's the first time this function is called and cmake started
-  if("${CMLOGGER_TIME_STARTED}" STREQUAL "0")
-    set(CMLOGGER_TIME_STARTED "${CMLOGGER_TIMER_STARTED}" PARENT_SCOPE)
+  # Initialize start time on first call
+  if(_CMLOGGER_TIME_STARTED_MS EQUAL 0)
+    set(_CMLOGGER_TIME_STARTED_MS ${current_time_ms} CACHE INTERNAL "")
   endif()
 endfunction()
 
-# Prints the initial time taken in seconds since since this file was first included or cmake started.
-# Substracts current time with CMLOGGER_TIME_STARTED and print it.
-function(log_print_initial_time_taken)
-  if(NOT CMLOGGER_TIMERS)
-    return()
-  endif()
-
-  string(TIMESTAMP CMLOGGER_TIMER_CURRENT "%s")
-  math(EXPR CMLOGGER_TIME_TAKEN ${CMLOGGER_TIMER_CURRENT}-${CMLOGGER_TIME_STARTED})
-  log_info("Initial Time Taken: ${CMLOGGER_TIME_TAKEN} seconds.")
+# Get elapsed time since log_reset_timer() in milliseconds
+function(log_time_taken out_int)
+  _cmlogger_get_timestamp_ms(current_time_ms)
+  math(EXPR duration_ms "${current_time_ms} - ${_CMLOGGER_TIMER_STARTED_MS}")
+  set(${out_int} ${duration_ms} PARENT_SCOPE)
 endfunction()
 
-# Prints the time taken in seconds since log_reset_timer() was last called.
-# Substracts current time with CMLOGGER_TIMER_STARTED and print it.
+# Get elapsed time since CMakeLogger initialization in milliseconds
+function(log_initial_time_taken out_int)
+  _cmlogger_get_timestamp_ms(current_time_ms)
+  math(EXPR duration_ms "${current_time_ms} - ${_CMLOGGER_TIME_STARTED_MS}")
+  set(${out_int} ${duration_ms} PARENT_SCOPE)
+endfunction()
+
+# Print the time taken since log_reset_timer()
 function(log_print_time_taken)
-  if(NOT CMLOGGER_TIMERS)
-    return()
-  endif()
-
-  string(TIMESTAMP CMLOGGER_TIMER_CURRENT "%s")
-  math(EXPR CMLOGGER_TIME_TAKEN ${CMLOGGER_TIMER_CURRENT}-${CMLOGGER_TIMER_STARTED})
-  log_info("Time Taken: ${CMLOGGER_TIME_TAKEN} seconds.")
+  log_time_taken(duration_ms)
+  log_format_duration_ms(formatted_duration ${duration_ms})
+  log_info("Time taken: ${formatted_duration}")
 endfunction()
 
-# Call to update timestamps when this file is included.
-log_reset_timer()
+# Print the initial time taken since CMakeLogger started
+function(log_print_initial_time_taken)
+  log_initial_time_taken(duration_ms)
+  log_format_duration_ms(formatted_duration ${duration_ms})
+  log_info("Total time since start: ${formatted_duration}")
+endfunction()
 
 # END Timers
 ##################################################################################################################
@@ -214,7 +266,7 @@ function(CMakeLogger_format msg level)
 
   # Add project name
   if(CMLOGGER_OUTPUT_PROJECTNAME AND NOT "${PROJECT_NAME}" STREQUAL "")
-    set(MSG_FORMAT "[${PROJECT_NAME}]: ${MSG_FORMAT}")
+    set(MSG_FORMAT "[${PROJECT_NAME}] ${MSG_FORMAT}")
   endif()
 
   # Add wrappers
@@ -611,6 +663,9 @@ function(CMakeLogger_execute_echo_color text color bold sameLine)
 endfunction()
 
 function(_cmlogger_main)
+  # Call to update timestamps when this file is included.
+  log_reset_timer()
+
   _cmlogger_should_colorize_output(colorized_output)
   if(colorized_output)
     if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.24")
