@@ -38,15 +38,16 @@
 #   Additionaly, you can configure in your root CMakeLists.txt how logs will be outputed.
 cmake_minimum_required(VERSION 3.10)
 
-set(CMLOGGER_VERSION "v1.0.1"
-  CACHE STRING "CMakeLogger: Version")
+set(CMLOGGER_VERSION "v1.0.1")
 
 ##################################################################################################################
 # Configurations
-# NOTE: It would be better overriding default configurations from your own CMake scripts as needed, instead
-# of modifying them here. e.g. right after including:
-# include(cmake/CMakeLogger.cmake)
-# set(CMLOGGER_OUTPUT_COLORIZED OFF CACHE STRING "" FORCE)
+# NOTE: To override default configurations, create a CMakeLoggerOptions.cmake file in the same directory
+# as this file. This approach provides better organization and cmake-gui compatibility.
+# Example: cmake/CMakeLoggerOptions.cmake with your custom settings.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/CMakeLoggerOptions.cmake")
+  include("${CMAKE_CURRENT_LIST_DIR}/CMakeLoggerOptions.cmake")
+endif()
 
 # Log Level Colors. Available colors: normal|black|red|green|yellow|blue|magenta|cyan|white
 set(CMLOGGER_COLOR_FATAL       "red")
@@ -57,31 +58,39 @@ set(CMLOGGER_COLOR_DEBUG       "bold;blue")
 set(CMLOGGER_COLOR_SUCCESS     "bold;green")
 
 set(CMLOGGER_OUTPUT_COLORIZED ON
-  CACHE STRING "CMakeLogger: Colorized output")
-set_property(CACHE CMLOGGER_OUTPUT_COLORIZED PROPERTY STRINGS ON OFF)
+  CACHE BOOL
+  "CMakeLogger: Colorized output"
+)
 
 set(CMLOGGER_OUTPUT_TIMESTAMP ON
-  CACHE STRING "CMakeLogger: Include timestamp in the log output. e.g. '~~ 15:05:14 INFO    My Log'")
-set_property(CACHE CMLOGGER_OUTPUT_TIMESTAMP PROPERTY STRINGS ON OFF)
+  CACHE BOOL
+  "CMakeLogger: Include timestamp in the log output. e.g. '>> 15:05:14.123456 INFO    My Log'"
+)
 
-set(CMLOGGER_OUTPUT_TIMESTAMP_FORMAT "%H:%M:%S"
-  CACHE STRING "CMakeLogger: Timestamp format")
+set(CMLOGGER_OUTPUT_TIMESTAMP_FORMAT "%H:%M:%S.%f"
+  CACHE STRING
+  "CMakeLogger: Timestamp format"
+)
 
-set(CMLOGGER_OUTPUT_WRAP "********"
-  CACHE STRING "CMakeLogger: String to surround your log. e.g. '~~ INFO    **** My Log ****'")
+set(CMLOGGER_OUTPUT_WRAP ""
+  CACHE STRING
+  "CMakeLogger: String to surround your log. e.g. '>> INFO    ##### My Log #####'"
+)
 
-set(CMLOGGER_OUTPUT_PREFIX "~~ "
-  CACHE STRING "CMakeLogger: Log out prefix. e.g. '~~ INFO    My Log'")
+set(CMLOGGER_OUTPUT_PREFIX ">>"
+  CACHE STRING
+  "CMakeLogger: Log out prefix. e.g. '>> INFO    My Log'"
+)
 
 set(CMLOGGER_OUTPUT_PROJECTNAME ON
-  CACHE STRING "CMakeLogger: Include current project name in the log output if exists. e.g. '~~ INFO    [MyProjectName]: My Log'")
-set_property(CACHE CMLOGGER_OUTPUT_PROJECTNAME PROPERTY STRINGS ON OFF)
-
-set(CMLOGGER_TIMERS ON
-  CACHE STRING "CMakeLogger: Turn this off if not desired to use any of the timers functions")
+  CACHE BOOL
+  "CMakeLogger: Include current project name in the log output if exists. e.g. '>> INFO    [MyProjectName]: My Log'"
+)
 
 set(CMLOGGER_VERBOSE ON
-  CACHE STRING "CMakeLogger: Turn this off if not desired to see CMakeLogger internal messages.")
+  CACHE BOOL
+  "CMakeLogger: Turn this off if not desired to see CMakeLogger internal messages."
+)
 
 # END Configurations
 ##################################################################################################################
@@ -248,8 +257,8 @@ function(CMakeLogger_log cmakeMsgType level msg color)
 
   CMakeLogger_format(${msg} ${level})
 
-  if(CMLOGGER_OUTPUT_COLORIZED AND CMLOGGER_CAN_PRINT_COLORS)
-    CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX}${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
+  if(_CMLOGGER_COLORIZED_OUTPUT)
+    CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX} ${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
 
     # For FATAL_ERROR and WARNING modes, cmake will print the call stack and stop the execution, therefore
     # we passing the original message-mode forward (without text) to maintain the defined behavior of cmake.
@@ -530,6 +539,12 @@ endfunction()
 # 3. Standard environment variables (CLICOLOR, COLORTERM, MAKE_TERMOUT, etc.)
 # 4. Terminal capability detection
 function(_cmlogger_should_colorize_output out_bool)
+  if(NOT CMLOGGER_OUTPUT_COLORIZED)
+    _cmlogger_message("Colorized output disabled by configuration")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
   # Override: NO_COLOR disables colors (https://no-color.org/)
   if(DEFINED ENV{NO_COLOR})
     _cmlogger_message("Colors disabled by NO_COLOR")
@@ -673,7 +688,7 @@ function(_cmlogger_main)
     endif()
   endif()
   _cmlogger_message("Colorized output: ${colorized_output}")
-  set(CMLOGGER_CAN_PRINT_COLORS ${colorized_output} PARENT_SCOPE)
+  set(_CMLOGGER_COLORIZED_OUTPUT ${colorized_output} PARENT_SCOPE)
 endfunction()
 
 _cmlogger_main()
