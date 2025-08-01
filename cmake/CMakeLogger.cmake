@@ -57,31 +57,39 @@ set(CMLOGGER_COLOR_DEBUG       "bold;blue")
 set(CMLOGGER_COLOR_SUCCESS     "bold;green")
 
 set(CMLOGGER_OUTPUT_COLORIZED ON
-  CACHE STRING "CMakeLogger: Colorized output")
-set_property(CACHE CMLOGGER_OUTPUT_COLORIZED PROPERTY STRINGS ON OFF)
+  CACHE BOOL
+  "CMakeLogger: Colorized output"
+)
 
 set(CMLOGGER_OUTPUT_TIMESTAMP ON
-  CACHE STRING "CMakeLogger: Include timestamp in the log output. e.g. '~~ 15:05:14 INFO    My Log'")
-set_property(CACHE CMLOGGER_OUTPUT_TIMESTAMP PROPERTY STRINGS ON OFF)
+  CACHE BOOL
+  "CMakeLogger: Include timestamp in the log output. e.g. '>> 15:05:14.123456 INFO    My Log'"
+)
 
-set(CMLOGGER_OUTPUT_TIMESTAMP_FORMAT "%H:%M:%S"
-  CACHE STRING "CMakeLogger: Timestamp format")
+set(CMLOGGER_OUTPUT_TIMESTAMP_FORMAT "%H:%M:%S.%f"
+  CACHE STRING
+  "CMakeLogger: Timestamp format"
+)
 
-set(CMLOGGER_OUTPUT_WRAP "********"
-  CACHE STRING "CMakeLogger: String to surround your log. e.g. '~~ INFO    **** My Log ****'")
+set(CMLOGGER_OUTPUT_WRAP ""
+  CACHE STRING
+  "CMakeLogger: String to surround your log. e.g. '>> INFO    ##### My Log #####'"
+)
 
-set(CMLOGGER_OUTPUT_PREFIX "~~ "
-  CACHE STRING "CMakeLogger: Log out prefix. e.g. '~~ INFO    My Log'")
+set(CMLOGGER_OUTPUT_PREFIX ">>"
+  CACHE STRING
+  "CMakeLogger: Log out prefix. e.g. '>> INFO    My Log'"
+)
 
 set(CMLOGGER_OUTPUT_PROJECTNAME ON
-  CACHE STRING "CMakeLogger: Include current project name in the log output if exists. e.g. '~~ INFO    [MyProjectName]: My Log'")
-set_property(CACHE CMLOGGER_OUTPUT_PROJECTNAME PROPERTY STRINGS ON OFF)
-
-set(CMLOGGER_TIMERS ON
-  CACHE STRING "CMakeLogger: Turn this off if not desired to use any of the timers functions")
+  CACHE BOOL
+  "CMakeLogger: Include current project name in the log output if exists. e.g. '>> INFO    [MyProjectName]: My Log'"
+)
 
 set(CMLOGGER_VERBOSE ON
-  CACHE STRING "CMakeLogger: Turn this off if not desired to see CMakeLogger internal messages.")
+  CACHE BOOL
+  "CMakeLogger: Turn this off if not desired to see CMakeLogger internal messages."
+)
 
 # END Configurations
 ##################################################################################################################
@@ -249,7 +257,7 @@ function(CMakeLogger_log cmakeMsgType level msg color)
   CMakeLogger_format(${msg} ${level})
 
   if(_CMLOGGER_COLORIZED_OUTPUT)
-    CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX}${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
+    CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX} ${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
 
     # For FATAL_ERROR and WARNING modes, cmake will print the call stack and stop the execution, therefore
     # we passing the original message-mode forward (without text) to maintain the defined behavior of cmake.
