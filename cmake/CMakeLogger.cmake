@@ -42,10 +42,12 @@ set(CMLOGGER_VERSION "v1.0.1")
 
 ##################################################################################################################
 # Configurations
-# NOTE: It would be better overriding default configurations from your own CMake scripts as needed, instead
-# of modifying them here. e.g. right after including:
-# include(cmake/CMakeLogger.cmake)
-# set(CMLOGGER_OUTPUT_COLORIZED OFF CACHE STRING "" FORCE)
+# NOTE: To override default configurations, create a CMakeLoggerOptions.cmake file in the same directory
+# as this file. This approach provides better organization and cmake-gui compatibility.
+# Example: cmake/CMakeLoggerOptions.cmake with your custom settings.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/CMakeLoggerOptions.cmake")
+  include("${CMAKE_CURRENT_LIST_DIR}/CMakeLoggerOptions.cmake")
+endif()
 
 # Log Level Colors. Available colors: normal|black|red|green|yellow|blue|magenta|cyan|white
 set(CMLOGGER_COLOR_FATAL       "red")

@@ -11,9 +11,6 @@ project(ExampleProject
   HOMEPAGE_URL "https://github.com/giladreich/cmake-logger"
 )
 
-# Enable colorized logs output (by default it's set to ON)
-set(CMLOGGER_OUTPUT_COLORIZED ON CACHE STRING "" FORCE)
-
 log_success("Hello CMakeLogger")
 log_debug("Hello CMakeLogger")
 log_info("Hello CMakeLogger")
