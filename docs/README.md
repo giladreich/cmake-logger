@@ -37,12 +37,15 @@ Each of the functions above receives a string as an argument for the log message
 
 CMakeLogger also allows convenient use of measuring time:
 - `log_reset_timer` - use before starting measuring time
+- `log_time_taken` - get elapsed time in milliseconds (requires output variable)
+- `log_initial_time_taken` - get time since cmake started in milliseconds (requires output variable)
 - `log_print_time_taken` - use after operation is finished
 - `log_print_initial_time_taken` - use to know how long since cmake started
+- `log_format_duration_ms` - format milliseconds into readable duration (requires output variable)
 
-This is useful if certain operations in your scripts take a while and you want to print how long in seconds it took.
+This is useful if certain operations in your scripts take a while and you want to print how long it took.
 
-Apart from the functions mentioned above, CMakeLogger allows different customization by giving the option to override some of configurations that can be found at the beginning of `CMakeLogger.cmake` file.
+Apart from the functions mentioned above, CMakeLogger allows different customization by creating a `CMakeLoggerOptions.cmake` file in the same directory as `CMakeLogger.cmake`. This approach provides better organization and cmake-gui compatibility.
 
 
 See [CMakeLists.txt](https://github.com/giladreich/CMakeLogger/blob/master/CMakeLists.txt) in the root directory for example usage.
@@ -60,6 +63,8 @@ include("cmake/CMakeLogger.cmake")
 
 This will define a set of functions for you to use (listed above).
 
+Optionally, create a `cmake/CMakeLoggerOptions.cmake` file to customize configurations such as output formatting, colors, and prefixes.
+
 Another possible way if you don't want to copy it into your project, is by adding this into your root `CMakeLists.txt`:
 ```cmake
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/CMakeLogger.cmake")
@@ -69,6 +74,8 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/CMakeLogger.cmake")
 endif()
 include("${CMAKE_BINARY_DIR}/CMakeLogger.cmake")
 ```
+
+Note: When using the download method, you'll need to manually create `CMakeLoggerOptions.cmake` in your project if you want to customize configurations.
 
 ## Contributing
 
