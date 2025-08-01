@@ -248,7 +248,7 @@ function(CMakeLogger_log cmakeMsgType level msg color)
 
   CMakeLogger_format(${msg} ${level})
 
-  if(CMLOGGER_OUTPUT_COLORIZED AND CMLOGGER_CAN_PRINT_COLORS)
+  if(_CMLOGGER_COLORIZED_OUTPUT)
     CMakeLogger_execute_echo_color("${CMLOGGER_OUTPUT_PREFIX}${msg}" ${LOG_COLOR} ${LOG_COLOR_BOLD} false)
 
     # For FATAL_ERROR and WARNING modes, cmake will print the call stack and stop the execution, therefore
@@ -530,6 +530,12 @@ endfunction()
 # 3. Standard environment variables (CLICOLOR, COLORTERM, MAKE_TERMOUT, etc.)
 # 4. Terminal capability detection
 function(_cmlogger_should_colorize_output out_bool)
+  if(NOT CMLOGGER_OUTPUT_COLORIZED)
+    _cmlogger_message("Colorized output disabled by configuration")
+    set(${out_bool} FALSE PARENT_SCOPE)
+    return()
+  endif()
+
   # Override: NO_COLOR disables colors (https://no-color.org/)
   if(DEFINED ENV{NO_COLOR})
     _cmlogger_message("Colors disabled by NO_COLOR")
@@ -673,7 +679,7 @@ function(_cmlogger_main)
     endif()
   endif()
   _cmlogger_message("Colorized output: ${colorized_output}")
-  set(CMLOGGER_CAN_PRINT_COLORS ${colorized_output} PARENT_SCOPE)
+  set(_CMLOGGER_COLORIZED_OUTPUT ${colorized_output} PARENT_SCOPE)
 endfunction()
 
 _cmlogger_main()
